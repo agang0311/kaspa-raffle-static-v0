@@ -71,6 +71,30 @@ jobs:
             done
           } >> "$GITHUB_STEP_SUMMARY"
 
+          annotate_failure() {
+            local title="$1"
+            local file="$2"
+            local log="$3"
+            [[ -f "$log" ]] || return 0
+            local message
+            message="$(tail -n 120 "$log")"
+            message="${message//'%'/'%25'}"
+            message="${message//$'\r'/'%0D'}"
+            message="${message//$'\n'/'%0A'}"
+            echo "::error file=$file,title=$title::$message"
+          }
+
+          if [[ "${{ steps.guest.outcome }}" != success ]]; then
+            annotate_failure "RISC Zero guest build failed" \
+              "beacon-prover/methods/guest/src/main.rs" \
+              "beacon-prover/guest-build.log"
+          fi
+          if [[ "${{ steps.host.outcome }}" == failure ]]; then
+            annotate_failure "Beacon prover host build failed" \
+              "beacon-prover/host/src/main.rs" \
+              "beacon-prover/host-build.log"
+          fi
+
       - name: Export guest image ID
         if: steps.host.outcome == 'success'
         shell: bash
