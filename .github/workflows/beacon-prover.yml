@@ -1,0 +1,46 @@
+name: Beacon prover
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/million-user-v4
+    paths:
+      - "beacon-prover/**"
+      - ".github/workflows/beacon-prover.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            beacon-prover/target
+          key: ${{ runner.os }}-risc0-3.0.4-${{ hashFiles('beacon-prover/**/Cargo.lock', 'beacon-prover/**/Cargo.toml') }}
+
+      - name: Install RISC Zero toolchain
+        shell: bash
+        run: |
+          curl -L https://risczero.com/install | bash
+          echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
+          "$HOME/.risc0/bin/rzup" install
+
+      - name: Build drand guest and prover
+        shell: bash
+        run: cargo build --release --manifest-path beacon-prover/Cargo.toml -p kaspa-raffle-beacon-prover
+
+      - name: Export guest image ID
+        shell: bash
+        run: beacon-prover/target/release/kaspa-raffle-beacon-prover image-id | tee beacon-prover/image-id.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kaspa-raffle-drand-guest
+          path: |
+            beacon-prover/image-id.txt
+            beacon-prover/target/release/kaspa-raffle-beacon-prover
