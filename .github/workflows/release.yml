@@ -19,6 +19,22 @@ jobs:
           node-version: "22.12.0"
           cache: npm
 
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check out pinned SilverScript
+        shell: bash
+        run: |
+          git clone https://github.com/kaspanet/silverscript.git .tools/silverscript
+          git -C .tools/silverscript checkout d25bd3427a093c17327ca3d6b9e1aa5f7688c863
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .tools/silverscript
+
+      - name: Build pinned SilverScript debugger
+        shell: bash
+        run: cargo build --manifest-path .tools/silverscript/Cargo.toml -p cli-debugger
+
       - run: npm ci
       - run: npm run verify
 
