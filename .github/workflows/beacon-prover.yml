@@ -21,7 +21,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             beacon-prover/target
-          key: ${{ runner.os }}-risc0-3.0.4-${{ hashFiles('beacon-prover/**/Cargo.lock', 'beacon-prover/**/Cargo.toml') }}
+          key: ${{ runner.os }}-risc0-3.0.4-${{ hashFiles('beacon-prover/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-risc0-3.0.4-
 
       - name: Install RISC Zero toolchain
         shell: bash
