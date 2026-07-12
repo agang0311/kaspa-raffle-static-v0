@@ -30,17 +30,55 @@ jobs:
           echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
           "$HOME/.risc0/bin/rzup" install
 
-      - name: Build drand guest and prover
+      - name: Build drand guest
+        id: guest
+        continue-on-error: true
         shell: bash
-        run: cargo build --release --manifest-path beacon-prover/Cargo.toml -p kaspa-raffle-beacon-prover
+        run: |
+          set -o pipefail
+          cargo build --release --manifest-path beacon-prover/Cargo.toml -p kaspa-raffle-beacon-methods 2>&1 \
+            | tee beacon-prover/guest-build.log
+
+      - name: Build prover host
+        id: host
+        if: steps.guest.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build --release --manifest-path beacon-prover/Cargo.toml -p kaspa-raffle-beacon-prover 2>&1 \
+            | tee beacon-prover/host-build.log
+
+      - name: Publish build diagnostics
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Beacon prover build'
+            echo
+            echo "Guest: ${{ steps.guest.outcome }}"
+            echo "Host: ${{ steps.host.outcome }}"
+            for log in beacon-prover/guest-build.log beacon-prover/host-build.log; do
+              if [[ -f "$log" ]]; then
+                echo
+                echo "### $(basename "$log")"
+                echo '```text'
+                tail -n 160 "$log"
+                echo '```'
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Export guest image ID
+        if: steps.host.outcome == 'success'
         shell: bash
         run: beacon-prover/target/release/kaspa-raffle-beacon-prover image-id | tee beacon-prover/image-id.txt
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: kaspa-raffle-drand-guest
+          name: kaspa-raffle-drand-build
           path: |
             beacon-prover/image-id.txt
+            beacon-prover/*-build.log
             beacon-prover/target/release/kaspa-raffle-beacon-prover
