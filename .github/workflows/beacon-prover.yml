@@ -33,6 +33,8 @@ jobs:
       - name: Build drand guest
         id: guest
         continue-on-error: true
+        env:
+          RISC0_GUEST_LOGFILE: /dev/stderr
         shell: bash
         run: |
           set -o pipefail
