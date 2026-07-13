@@ -32,11 +32,12 @@ jobs:
         with:
           workspaces: .tools/silverscript
 
-      - name: Build pinned SilverScript debugger
+      - name: Build pinned SilverScript compiler
         shell: bash
-        run: cargo build --manifest-path .tools/silverscript/Cargo.toml -p cli-debugger
+        run: cargo build --manifest-path .tools/silverscript/Cargo.toml -p silverscript-lang --bin silverc
 
       - run: npm ci
+      - run: npm run compile:contract
       - run: npm run verify
 
       - name: Prepare release files
