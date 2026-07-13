@@ -112,10 +112,41 @@ jobs:
         if: steps.host.outcome == 'success'
         shell: bash
         run: |
-          beacon-prover/target/release/kaspa-raffle-beacon-prover execute \
+          execution="$(beacon-prover/target/release/kaspa-raffle-beacon-prover execute \
+            123 \
+            b75c69d0b72a5d906e854e808ba7e2accb1542ac355ae486d591aa9d43765482e26cd02df835d3546d23c4b13e0dfc92)"
+          echo "$execution" | tee beacon-prover/execution.json
+          echo "::notice file=beacon-prover/execution.json,title=Drand guest execution::$execution"
+
+      - name: Prove known quicknet beacon
+        id: prove
+        if: steps.execute.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 180
+        shell: bash
+        run: |
+          set -o pipefail
+          /usr/bin/time -v beacon-prover/target/release/kaspa-raffle-beacon-prover \
             123 \
             b75c69d0b72a5d906e854e808ba7e2accb1542ac355ae486d591aa9d43765482e26cd02df835d3546d23c4b13e0dfc92 \
-            | tee beacon-prover/execution.json
+            beacon-prover/proof-123.json \
+            2>&1 | tee beacon-prover/prove.log
+
+      - name: Publish proof diagnostics
+        if: always()
+        shell: bash
+        run: |
+          if [[ "${{ steps.prove.outcome }}" == success ]]; then
+            proof_bytes="$(wc -c < beacon-prover/proof-123.json)"
+            seal_bytes="$(jq -r '.seal | length / 2' beacon-prover/proof-123.json)"
+            echo "::notice file=beacon-prover/proof-123.json,title=Drand succinct proof::proof_bytes=$proof_bytes seal_bytes=$seal_bytes"
+          elif [[ -f beacon-prover/prove.log ]]; then
+            message="$(tail -n 120 beacon-prover/prove.log)"
+            message="${message//'%'/'%25'}"
+            message="${message//$'\r'/'%0D'}"
+            message="${message//$'\n'/'%0A'}"
+            echo "::error file=beacon-prover/host/src/main.rs,title=Drand succinct proving failed::$message"
+          fi
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -124,10 +155,12 @@ jobs:
           path: |
             beacon-prover/image-id.txt
             beacon-prover/execution.json
+            beacon-prover/proof-123.json
+            beacon-prover/prove.log
             beacon-prover/*-build.log
             beacon-prover/target/release/kaspa-raffle-beacon-prover
 
       - name: Enforce successful build
-        if: always() && (steps.guest.outcome != 'success' || steps.host.outcome != 'success' || steps.image.outcome != 'success' || steps.execute.outcome != 'success')
+        if: always() && (steps.guest.outcome != 'success' || steps.host.outcome != 'success' || steps.image.outcome != 'success' || steps.execute.outcome != 'success' || steps.prove.outcome != 'success')
         shell: bash
         run: exit 1
