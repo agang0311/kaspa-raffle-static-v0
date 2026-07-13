@@ -107,16 +107,27 @@ jobs:
           echo "$image_id" | tee beacon-prover/image-id.txt
           echo "::notice file=beacon-prover/image-id.txt,title=Drand guest image ID::$image_id"
 
+      - name: Execute known quicknet beacon
+        id: execute
+        if: steps.host.outcome == 'success'
+        shell: bash
+        run: |
+          beacon-prover/target/release/kaspa-raffle-beacon-prover execute \
+            123 \
+            b75c69d0b72a5d906e854e808ba7e2accb1542ac355ae486d591aa9d43765482e26cd02df835d3546d23c4b13e0dfc92 \
+            | tee beacon-prover/execution.json
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: kaspa-raffle-drand-build
           path: |
             beacon-prover/image-id.txt
+            beacon-prover/execution.json
             beacon-prover/*-build.log
             beacon-prover/target/release/kaspa-raffle-beacon-prover
 
       - name: Enforce successful build
-        if: always() && (steps.guest.outcome != 'success' || steps.host.outcome != 'success' || steps.image.outcome != 'success')
+        if: always() && (steps.guest.outcome != 'success' || steps.host.outcome != 'success' || steps.image.outcome != 'success' || steps.execute.outcome != 'success')
         shell: bash
         run: exit 1
