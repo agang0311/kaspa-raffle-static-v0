@@ -2,6 +2,11 @@ name: Beacon prover
 
 on:
   workflow_dispatch:
+    inputs:
+      prove:
+        description: Generate the known succinct receipt
+        type: boolean
+        default: true
   push:
     branches:
       - agent/million-user-v4
@@ -120,7 +125,7 @@ jobs:
 
       - name: Prove known quicknet beacon
         id: prove
-        if: steps.execute.outcome == 'success'
+        if: steps.execute.outcome == 'success' && github.event_name == 'workflow_dispatch' && inputs.prove
         continue-on-error: true
         timeout-minutes: 180
         shell: bash
@@ -133,7 +138,7 @@ jobs:
             2>&1 | tee beacon-prover/prove.log
 
       - name: Publish proof diagnostics
-        if: always()
+        if: always() && steps.prove.outcome != 'skipped'
         shell: bash
         run: |
           if [[ "${{ steps.prove.outcome }}" == success ]]; then
@@ -161,6 +166,6 @@ jobs:
             beacon-prover/target/release/kaspa-raffle-beacon-prover
 
       - name: Enforce successful build
-        if: always() && (steps.guest.outcome != 'success' || steps.host.outcome != 'success' || steps.image.outcome != 'success' || steps.execute.outcome != 'success' || steps.prove.outcome != 'success')
+        if: always() && (steps.guest.outcome != 'success' || steps.host.outcome != 'success' || steps.image.outcome != 'success' || steps.execute.outcome != 'success' || (github.event_name == 'workflow_dispatch' && inputs.prove && steps.prove.outcome != 'success'))
         shell: bash
         run: exit 1
