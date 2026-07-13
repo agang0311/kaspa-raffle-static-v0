@@ -99,9 +99,13 @@ jobs:
           fi
 
       - name: Export guest image ID
+        id: image
         if: steps.host.outcome == 'success'
         shell: bash
-        run: beacon-prover/target/release/kaspa-raffle-beacon-prover image-id | tee beacon-prover/image-id.txt
+        run: |
+          image_id="$(beacon-prover/target/release/kaspa-raffle-beacon-prover image-id)"
+          echo "$image_id" | tee beacon-prover/image-id.txt
+          echo "::notice file=beacon-prover/image-id.txt,title=Drand guest image ID::$image_id"
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -111,3 +115,8 @@ jobs:
             beacon-prover/image-id.txt
             beacon-prover/*-build.log
             beacon-prover/target/release/kaspa-raffle-beacon-prover
+
+      - name: Enforce successful build
+        if: always() && (steps.guest.outcome != 'success' || steps.host.outcome != 'success' || steps.image.outcome != 'success')
+        shell: bash
+        run: exit 1
