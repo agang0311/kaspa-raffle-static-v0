@@ -159,7 +159,7 @@ jobs:
         id: prove
         if: steps.request.outputs.round != ''
         continue-on-error: true
-        timeout-minutes: 180
+        timeout-minutes: 360
         shell: bash
         run: |
           set -o pipefail
