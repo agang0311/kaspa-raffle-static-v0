@@ -1,12 +1,23 @@
 name: Beacon prover
 
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
     inputs:
       prove:
-        description: Generate the known succinct receipt
+        description: Generate a succinct receipt
         type: boolean
         default: true
+      round:
+        description: Quicknet round to prove
+        type: string
+        default: "123"
+      signature:
+        description: Quicknet signature (96 lowercase hex characters)
+        type: string
+        default: b75c69d0b72a5d906e854e808ba7e2accb1542ac355ae486d591aa9d43765482e26cd02df835d3546d23c4b13e0dfc92
   push:
     branches:
       - agent/million-user-v4
@@ -123,18 +134,41 @@ jobs:
           echo "$execution" | tee beacon-prover/execution.json
           echo "::notice file=beacon-prover/execution.json,title=Drand guest execution::$execution"
 
-      - name: Prove known quicknet beacon
+      - name: Resolve proof request
+        id: request
+        if: steps.execute.outcome == 'success'
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == workflow_dispatch && "${{ inputs.prove }}" == true ]]; then
+            round='${{ inputs.round }}'
+            signature='${{ inputs.signature }}'
+          elif [[ "${{ github.event_name }}" == push && -f beacon-prover/prove-request.json ]]; then
+            round="$(jq -r '.round' beacon-prover/prove-request.json)"
+            signature="$(jq -r '.signature' beacon-prover/prove-request.json)"
+          else
+            exit 0
+          fi
+          if [[ ! "$round" =~ ^[0-9]+$ ]] || [[ ! "$signature" =~ ^[0-9a-f]{96}$ ]]; then
+            echo "Invalid quicknet round or signature" >&2
+            exit 2
+          fi
+          echo "round=$round" >> "$GITHUB_OUTPUT"
+          echo "signature=$signature" >> "$GITHUB_OUTPUT"
+
+      - name: Prove requested quicknet beacon
         id: prove
-        if: steps.execute.outcome == 'success' && github.event_name == 'workflow_dispatch' && inputs.prove
+        if: steps.request.outputs.round != ''
         continue-on-error: true
         timeout-minutes: 180
         shell: bash
         run: |
           set -o pipefail
+          round='${{ steps.request.outputs.round }}'
+          signature='${{ steps.request.outputs.signature }}'
           /usr/bin/time -v beacon-prover/target/release/kaspa-raffle-beacon-prover \
-            123 \
-            b75c69d0b72a5d906e854e808ba7e2accb1542ac355ae486d591aa9d43765482e26cd02df835d3546d23c4b13e0dfc92 \
-            beacon-prover/proof-123.json \
+            "$round" \
+            "$signature" \
+            "beacon-prover/proof-$round.json" \
             2>&1 | tee beacon-prover/prove.log
 
       - name: Publish proof diagnostics
@@ -142,9 +176,10 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ steps.prove.outcome }}" == success ]]; then
-            proof_bytes="$(wc -c < beacon-prover/proof-123.json)"
-            seal_bytes="$(jq -r '.seal | length / 2' beacon-prover/proof-123.json)"
-            echo "::notice file=beacon-prover/proof-123.json,title=Drand succinct proof::proof_bytes=$proof_bytes seal_bytes=$seal_bytes"
+            proof_file="beacon-prover/proof-${{ steps.request.outputs.round }}.json"
+            proof_bytes="$(wc -c < "$proof_file")"
+            seal_bytes="$(jq -r '.seal | length / 2' "$proof_file")"
+            echo "::notice file=$proof_file,title=Drand succinct proof::round=${{ steps.request.outputs.round }} proof_bytes=$proof_bytes seal_bytes=$seal_bytes"
           elif [[ -f beacon-prover/prove.log ]]; then
             message="$(tail -n 120 beacon-prover/prove.log)"
             message="${message//'%'/'%25'}"
@@ -153,6 +188,20 @@ jobs:
             echo "::error file=beacon-prover/host/src/main.rs,title=Drand succinct proving failed::$message"
           fi
 
+      - name: Cache pushed proof
+        if: github.event_name == 'push' && steps.prove.outcome == 'success'
+        shell: bash
+        run: |
+          round='${{ steps.request.outputs.round }}'
+          mkdir -p beacon-prover/proofs
+          mv "beacon-prover/proof-$round.json" "beacon-prover/proofs/$round.json"
+          rm beacon-prover/prove-request.json
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add beacon-prover/proofs beacon-prover/prove-request.json
+          git commit -m "Cache drand proof for round $round"
+          git push
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -160,12 +209,13 @@ jobs:
           path: |
             beacon-prover/image-id.txt
             beacon-prover/execution.json
-            beacon-prover/proof-123.json
+            beacon-prover/proof-*.json
+            beacon-prover/proofs/*.json
             beacon-prover/prove.log
             beacon-prover/*-build.log
             beacon-prover/target/release/kaspa-raffle-beacon-prover
 
       - name: Enforce successful build
-        if: always() && (steps.guest.outcome != 'success' || steps.host.outcome != 'success' || steps.image.outcome != 'success' || steps.execute.outcome != 'success' || (github.event_name == 'workflow_dispatch' && inputs.prove && steps.prove.outcome != 'success'))
+        if: always() && (steps.guest.outcome != 'success' || steps.host.outcome != 'success' || steps.image.outcome != 'success' || steps.execute.outcome != 'success' || (steps.request.outputs.round != '' && steps.prove.outcome != 'success'))
         shell: bash
         run: exit 1
