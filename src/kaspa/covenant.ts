@@ -5,17 +5,13 @@ import {
   ScriptBuilder,
   type ScriptPublicKey
 } from "@onekeyfe/kaspa-wasm";
-import raffleRoundArtifact from "../contracts/compiled/raffle-round.artifact.json";
-import raffleRoundV1Artifact from "../contracts/compiled/raffle-round-v1.artifact.json";
-import raffleRoundV2Artifact from "../contracts/compiled/raffle-round-v2.artifact.json";
-import raffleRoundV3BetaArtifact from "../contracts/compiled/raffle-round-v3-beta.artifact.json";
-import raffleRoundV31Artifact from "../contracts/compiled/raffle-round-v3.1.artifact.json";
-import raffleRoundV32Artifact from "../contracts/compiled/raffle-round-v3.2.artifact.json";
-import raffleRoundV33Artifact from "../contracts/compiled/raffle-round-v3.3.artifact.json";
-import raffleRoundV34Artifact from "../contracts/compiled/raffle-round-v3.4.artifact.json";
-import raffleRoundManifest from "../contracts/compiled/raffle-round.manifest.json";
+import raffleRoundV10Artifact from "../contracts/compiled/raffle-round-v10.artifact.json";
+import raffleRefundV1Artifact from "../contracts/compiled/raffle-refund-v1.artifact.json";
 import { hexToBytes, sha256Hex } from "../raffle/randomness";
+import { TICKET_EMPTY_FRONTIER_HEX, TICKET_EMPTY_ROOT_HEX, TICKET_MERKLE_PROOF_BYTES } from "../raffle/merkle";
 import type { RoundState } from "../raffle/types";
+import type { ChainRandomnessWitness } from "./chain-randomness";
+import { RAFFLE_CONTRACT_VERSION } from "../raffle/metadata";
 import { ensureKaspaWasmReady } from "./wasm";
 
 export interface CovenantArtifactStatus {
@@ -24,14 +20,6 @@ export interface CovenantArtifactStatus {
   network: string;
   status: string;
   message: string;
-}
-
-interface RaffleRoundManifest {
-  contract: string;
-  network: string;
-  status: string;
-  script: string | null;
-  abi: unknown;
 }
 
 interface RuntimeAbiInput {
@@ -50,7 +38,7 @@ interface RuntimeStateField {
   type: string;
 }
 
-interface RaffleRoundRuntimeArtifact {
+export interface RaffleRoundRuntimeArtifact {
   contract: string;
   compilerVersion: string;
   script: string;
@@ -64,60 +52,42 @@ interface RaffleRoundRuntimeArtifact {
   stateFields: RuntimeStateField[];
 }
 
-export type RaffleCovenantEntrypoint = "buy" | "close" | "finalize" | "refund_all";
+export type RaffleCovenantEntrypoint = "buy" | "finalize" | "refund_next" | "start_refund" | "refund_batch8";
 export type RaffleCovenantStateValue = bigint | Uint8Array;
 export type RaffleCovenantStateValues = Record<string, RaffleCovenantStateValue>;
 
-const manifest = raffleRoundManifest as RaffleRoundManifest;
-const artifact = raffleRoundArtifact as RaffleRoundRuntimeArtifact;
-const legacyV1Artifact = raffleRoundV1Artifact as RaffleRoundRuntimeArtifact;
-const legacyV2Artifact = raffleRoundV2Artifact as RaffleRoundRuntimeArtifact;
-const legacyV3BetaArtifact = raffleRoundV3BetaArtifact as RaffleRoundRuntimeArtifact;
-const legacyV31Artifact = raffleRoundV31Artifact as RaffleRoundRuntimeArtifact;
-const legacyV32Artifact = raffleRoundV32Artifact as RaffleRoundRuntimeArtifact;
-const legacyV33Artifact = raffleRoundV33Artifact as RaffleRoundRuntimeArtifact;
-const legacyV34Artifact = raffleRoundV34Artifact as RaffleRoundRuntimeArtifact;
-const LEGACY_V1_CONTRACT_VERSION = "raffle-v1-timeout-refund";
-const LEGACY_V2_CONTRACT_VERSION = "raffle-v2-direct-finalize";
-const LEGACY_V3_BETA_CONTRACT_VERSION = "raffle-v3-batch-1000";
-const LEGACY_V3_1_CONTRACT_VERSION = "raffle-v3.1-batch-1000";
-const LEGACY_V3_2_CONTRACT_VERSION = "raffle-v3.2-participant-finalize";
-export const LEGACY_V3_3_CONTRACT_VERSION = "raffle-v3.3-participant-finalize-fee40";
-export const LEGACY_V3_4_CONTRACT_VERSION = "raffle-v3.4-low-fee";
-export const PARTICIPANT_FINALIZE_CONTRACT_VERSION = "raffle-v3.5-million-ticket";
+const raffleArtifact = raffleRoundV10Artifact as RaffleRoundRuntimeArtifact;
+const refundArtifact = raffleRefundV1Artifact as RaffleRoundRuntimeArtifact;
+export const CURRENT_RAFFLE_CONTRACT_VERSION = RAFFLE_CONTRACT_VERSION;
 const INT_STATE_FIELD_SIZE = 8;
 const ZERO32_HEX = "00".repeat(32);
-const BYTES32_STATE_BYTES = 32;
 
 const entrypointNames: Record<RaffleCovenantEntrypoint, string> = {
   buy: "buy",
-  close: "close",
   finalize: "finalize",
-  refund_all: "refund_all"
+  refund_next: "refundNext",
+  start_refund: "startRefund",
+  refund_batch8: "refundBatch8"
 };
 
 export function getRaffleCovenantStatus(): CovenantArtifactStatus {
-  const enabled = artifact.contract === "RaffleRound" && Boolean(artifact.script) && artifact.abi.length > 0;
+  const enabled = raffleArtifact.contract === "RaffleRoundV10" &&
+    refundArtifact.contract === "RaffleRefundV1" &&
+    [raffleArtifact, refundArtifact].every((candidate) => Boolean(candidate.script) && candidate.abi.length > 0);
 
   return {
     enabled,
-    contract: manifest.contract,
-    network: manifest.network,
-    status: enabled ? "compiled-runtime" : manifest.status,
+    contract: raffleArtifact.contract,
+    network: "toccata-v1",
+    status: enabled ? "compiled-runtime" : "unavailable",
     message: enabled
       ? "Covenant artifacts are available. Finalize will build a Toccata covenant spend."
       : "Covenant bytecode is compiled, but the browser transaction builder must be wired and verified on TN12 before enabling automatic contract payout."
   };
 }
 
-export function isParticipantFinalizeContractVersion(contractVersion: string): boolean {
-  return contractVersion === PARTICIPANT_FINALIZE_CONTRACT_VERSION ||
-    contractVersion === LEGACY_V3_4_CONTRACT_VERSION ||
-    contractVersion === LEGACY_V3_3_CONTRACT_VERSION;
-}
-
-export function isLowFeeContractVersion(contractVersion: string): boolean {
-  return contractVersion === PARTICIPANT_FINALIZE_CONTRACT_VERSION || contractVersion === LEGACY_V3_4_CONTRACT_VERSION;
+export function isCurrentRaffleContractVersion(contractVersion: string): boolean {
+  return contractVersion === RAFFLE_CONTRACT_VERSION;
 }
 
 export function assertRaffleCovenantReady(): void {
@@ -128,8 +98,12 @@ export function assertRaffleCovenantReady(): void {
   }
 }
 
-export function getRaffleRuntimeArtifact() {
-  return artifact;
+export function getRaffleRuntimeArtifact(contractVersion: string) {
+  return raffleArtifactForContractVersion(contractVersion);
+}
+
+export function getRaffleRefundRuntimeArtifact() {
+  return refundArtifact;
 }
 
 export function bytesToHex(bytes: Uint8Array): string {
@@ -165,31 +139,52 @@ export function raffleStatusCode(status: RoundState["status"]): bigint {
   }
 }
 
-export function emptyRaffleCovenantState(): RaffleCovenantStateValues {
+export function emptyRaffleCovenantState(
+  runtimeArtifact: RaffleRoundRuntimeArtifact = raffleArtifact
+): RaffleCovenantStateValues {
   return Object.fromEntries(
-    artifact.stateFields.map((field) => [
+    runtimeArtifact.stateFields.map((field) => [
       field.name,
-      field.type === "byte[32]" ? hexToBytes(ZERO32_HEX) : 0n
+      field.type === "int" ? 0n : new Uint8Array(fixedByteStateLength(field.type, field.name))
     ])
   );
 }
 
 export async function raffleCovenantStateFromRound(round: RoundState): Promise<RaffleCovenantStateValues> {
-  const state = emptyRaffleCovenantState();
+  const runtimeArtifact = round.status === "Refunding"
+    ? refundArtifact
+    : raffleArtifactForContractVersion(round.contractVersion);
+  return raffleCovenantStateFromRoundWithArtifact(round, runtimeArtifact);
+}
+
+async function raffleCovenantStateFromRoundWithArtifact(
+  round: RoundState,
+  runtimeArtifact: RaffleRoundRuntimeArtifact
+): Promise<RaffleCovenantStateValues> {
+  const state = emptyRaffleCovenantState(runtimeArtifact);
   const creatorPublicKey = bytes32FromHex(round.creatorPubkey, "creator public key");
-  const oraclePublicKey = bytes32FromHex(round.oraclePublicKey, "oracle public key");
-  const ticketRoot = round.ticketRoot ? bytes32FromHex(round.ticketRoot, "ticket root") : hexToBytes(ZERO32_HEX);
+  const ticketRoot = round.ticketRoot
+    ? bytes32FromHex(round.ticketRoot, "ticket root")
+    : hexToBytes(TICKET_EMPTY_ROOT_HEX);
 
   state.max_tickets = BigInt(round.maxTickets);
   state.ticket_price = round.ticketPrice;
   state.creator_pubkey = creatorPublicKey;
   state.refund_after_daa = BigInt(round.refundAfterDaaScore || "0");
   state.sold_tickets = BigInt(round.soldTickets);
-  state.sold_batches = BigInt(round.soldBatches);
-  state.oracle_pubkey = oraclePublicKey;
+  if ("sold_batches" in state) state.sold_batches = BigInt(round.soldBatches);
   state.ticket_root = ticketRoot;
 
-  for (let index = 0; index < 20; index += 1) {
+  if ("frontier" in state) {
+    const frontier = hexToBytes(round.ticketFrontier || TICKET_EMPTY_FRONTIER_HEX);
+    if (frontier.length !== TICKET_MERKLE_PROOF_BYTES) throw new Error("Ticket frontier must be exactly 640 bytes.");
+    state.frontier = frontier;
+  }
+  if ("refund_cursor" in state) {
+    state.refund_cursor = BigInt(round.refundCursor ?? 0);
+  }
+
+  for (let index = 0; index < 20 && `owner_${String(index + 1).padStart(2, "0")}` in state; index += 1) {
     const suffix = String(index + 1).padStart(2, "0");
     const fieldName = `owner_${suffix}`;
     const ownerPubkey = round.ticketOwnerPubkeys[index];
@@ -203,7 +198,7 @@ export async function raffleCovenantStateFromRound(round: RoundState): Promise<R
 
 export function encodeRaffleCovenantState(
   state: RaffleCovenantStateValues,
-  runtimeArtifact: RaffleRoundRuntimeArtifact = artifact
+  runtimeArtifact: RaffleRoundRuntimeArtifact = raffleArtifact
 ): Uint8Array {
   const chunks = runtimeArtifact.stateFields.map((field) => encodeStateField(field, state[field.name]));
   const encoded = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.length, 0));
@@ -223,7 +218,7 @@ export function encodeRaffleCovenantState(
 
 export function buildRaffleRedeemScript(
   state: RaffleCovenantStateValues,
-  runtimeArtifact: RaffleRoundRuntimeArtifact = artifact
+  runtimeArtifact: RaffleRoundRuntimeArtifact = raffleArtifact
 ): Uint8Array {
   const script = hexToBytes(runtimeArtifact.script);
   const encodedState = encodeRaffleCovenantState(state, runtimeArtifact);
@@ -234,23 +229,12 @@ export function buildRaffleRedeemScript(
 
 export function buildRaffleRedeemScriptForContractVersion(
   state: RaffleCovenantStateValues,
-  contractVersion?: string
+  contractVersion?: string,
+  status?: RoundState["status"]
 ): Uint8Array {
-  const runtimeArtifact = contractVersion === LEGACY_V1_CONTRACT_VERSION
-    ? legacyV1Artifact
-    : contractVersion === LEGACY_V2_CONTRACT_VERSION
-      ? legacyV2Artifact
-      : contractVersion === LEGACY_V3_BETA_CONTRACT_VERSION
-        ? legacyV3BetaArtifact
-        : contractVersion === LEGACY_V3_1_CONTRACT_VERSION
-          ? legacyV31Artifact
-          : contractVersion === LEGACY_V3_2_CONTRACT_VERSION
-            ? legacyV32Artifact
-          : contractVersion === LEGACY_V3_3_CONTRACT_VERSION
-            ? legacyV33Artifact
-          : contractVersion === LEGACY_V3_4_CONTRACT_VERSION
-            ? legacyV34Artifact
-          : artifact;
+  const runtimeArtifact = status === "Refunding"
+    ? refundArtifact
+    : raffleArtifactForContractVersion(contractVersion);
 
   return buildRaffleRedeemScript(state, runtimeArtifact);
 }
@@ -260,9 +244,9 @@ export async function assertRaffleRedeemScriptMatchesRound(
   redeemScriptHex: string,
   label: string
 ): Promise<void> {
-  const state = await raffleCovenantStateFromRound(round);
   const redeemScript = hexToBytes(redeemScriptHex);
   const runtimeArtifact = raffleArtifactForRedeemScript(redeemScript);
+  const state = await raffleCovenantStateFromRoundWithArtifact(round, runtimeArtifact);
   const expected = bytesToHex(buildRaffleRedeemScript(state, runtimeArtifact));
 
   if (expected !== redeemScriptHex.toLowerCase()) {
@@ -273,13 +257,20 @@ export async function assertRaffleRedeemScriptMatchesRound(
   }
 }
 
-export async function buildRaffleScriptPublicKey(state: RaffleCovenantStateValues): Promise<ScriptPublicKey> {
+export async function buildRaffleScriptPublicKey(
+  state: RaffleCovenantStateValues,
+  runtimeArtifact: RaffleRoundRuntimeArtifact = raffleArtifact
+): Promise<ScriptPublicKey> {
   await ensureKaspaWasmReady();
-  return payToScriptHashScript(buildRaffleRedeemScript(state));
+  return payToScriptHashScript(buildRaffleRedeemScript(state, runtimeArtifact));
 }
 
-export async function buildRaffleAddress(state: RaffleCovenantStateValues, network: string): Promise<string> {
-  const scriptPublicKey = await buildRaffleScriptPublicKey(state);
+export async function buildRaffleAddress(
+  state: RaffleCovenantStateValues,
+  network: string,
+  runtimeArtifact: RaffleRoundRuntimeArtifact = raffleArtifact
+): Promise<string> {
+  const scriptPublicKey = await buildRaffleScriptPublicKey(state, runtimeArtifact);
   const address = addressFromScriptPublicKey(scriptPublicKey, network);
 
   if (!address) {
@@ -295,84 +286,88 @@ export function pubkeyHexFromAddress(address: string): string {
 
 export function buildRaffleBuySignatureScript(
   currentRedeemScript: Uint8Array,
-  nextTicketRootHex: string,
   ownerPubkeyHex: string,
   ticketCount: number
 ): string {
-  const nextTicketRoot = bytes32FromHex(nextTicketRootHex, "next ticket root");
   const ownerPubkey = bytes32FromHex(ownerPubkeyHex, "ticket owner public key");
 
-  return buildRaffleP2shSignatureScript("buy", currentRedeemScript, (builder, _runtimeArtifact, entry) => {
-    builder.addData(nextTicketRoot);
+  return buildRaffleP2shSignatureScript("buy", currentRedeemScript, (builder) => {
     builder.addData(ownerPubkey);
-
-    if (entry.inputs.length >= 3) {
-      builder.addI64(BigInt(ticketCount));
-    } else if (ticketCount !== 1) {
-      throw new Error("Rounds created with an older contract support one ticket per purchase.");
-    }
+    builder.addI64(BigInt(ticketCount));
   });
 }
 
-export function buildRaffleCloseSignatureScript(currentRedeemScript: Uint8Array): string {
-  return buildRaffleP2shSignatureScript("close", currentRedeemScript);
+function addChainHeaderPair(builder: ScriptBuilder, witness: ChainRandomnessWitness): void {
+  builder.addData(hexToBytes(witness.target.beforeDaaHex));
+  builder.addI64(witness.target.daaScore);
+  builder.addI64(witness.target.blueScore);
+  builder.addData(hexToBytes(witness.target.encodedBlueWorkHex));
+  builder.addData(bytes32FromHex(witness.target.pruningPoint, "target pruning point"));
+  builder.addData(bytes32FromHex(witness.parent.hash, "target selected parent hash"));
+  builder.addData(hexToBytes(witness.parent.beforeDaaHex));
+  builder.addI64(witness.parent.daaScore);
+  builder.addI64(witness.parent.blueScore);
+  builder.addData(hexToBytes(witness.parent.encodedBlueWorkHex));
+  builder.addData(bytes32FromHex(witness.parent.pruningPoint, "parent pruning point"));
 }
 
 export function buildRaffleFinalizeSignatureScript(
   currentRedeemScript: Uint8Array,
-  oracleSignatureHex: string,
-  oracleSeedHex: string,
+  witness: ChainRandomnessWitness,
+  finalizeFeeSompi: bigint,
   winnerTicketId: number,
   winnerScriptPublicKey: ScriptPublicKey,
-  callerScriptPublicKey: ScriptPublicKey
+  winnerProofHex?: string
 ): string {
-  const oracleSignature = hexToBytes(oracleSignatureHex);
-  const oracleSeed = bytes32FromHex(oracleSeedHex, "oracle seed");
-
-  if (oracleSignature.length !== 64) {
-    throw new Error("Oracle signature must be exactly 64 bytes.");
-  }
-
-  return buildRaffleP2shSignatureScript("finalize", currentRedeemScript, (builder, _runtimeArtifact, entry) => {
-    if (entry.inputs.length < 5) {
-      throw new Error("This legacy round does not enforce participant-only drawing. Refund it after timeout or create a new round.");
+  return buildRaffleP2shSignatureScript("finalize", currentRedeemScript, (builder) => {
+    if (!winnerProofHex) {
+      throw new Error("Finalize requires the winner Merkle proof.");
     }
-
-    builder.addData(oracleSignature);
-    builder.addData(oracleSeed);
+    addChainHeaderPair(builder, witness);
+    builder.addI64(finalizeFeeSompi);
     builder.addI64(BigInt(winnerTicketId));
     builder.addData(pubkeyFromP2pkScriptPublicKey(winnerScriptPublicKey));
-    builder.addData(pubkeyFromP2pkScriptPublicKey(callerScriptPublicKey));
+    builder.addData(ticketProofFromHex(winnerProofHex, "winner"));
   });
 }
 
-export function buildRaffleRefundAllSignatureScript(currentRedeemScript: Uint8Array): string {
-  return buildRaffleP2shSignatureScript("refund_all", currentRedeemScript);
+export function buildRaffleRefundNextSignatureScript(
+  currentRedeemScript: Uint8Array,
+  ticketId: number,
+  ownerPubkeyHex: string,
+  ownerProofHex: string
+): string {
+  return buildRaffleP2shSignatureScript("refund_next", currentRedeemScript, (builder) => {
+    builder.addI64(BigInt(ticketId));
+    builder.addData(bytes32FromHex(ownerPubkeyHex, "refund owner public key"));
+    builder.addData(ticketProofFromHex(ownerProofHex, "refund owner"));
+  });
 }
 
-export function buildNextTicketRootHex(
-  roundId: string,
-  currentTicketRoot: string,
-  ticket: { ticketId: number; owner: string; buyerCommitment: string; ticketCount?: number }
-): Promise<string> {
-  const root = currentTicketRoot || ZERO32_HEX;
-  const ticketRange = ticket.ticketCount === undefined
-    ? `${ticket.ticketId}`
-    : `${ticket.ticketId}-${ticket.ticketId + ticket.ticketCount - 1}`;
-
-  return sha256Hex(`${roundId}|${root}|${ticketRange}:${ticket.owner}:${ticket.buyerCommitment}`);
+export function buildRaffleStartRefundSignatureScript(currentRedeemScript: Uint8Array): string {
+  const template = hexToBytes(refundArtifact.script);
+  const stateStart = refundArtifact.stateLayout.start;
+  const stateEnd = stateStart + refundArtifact.stateLayout.len;
+  return buildRaffleP2shSignatureScript("start_refund", currentRedeemScript, (builder) => {
+    builder.addData(template.slice(0, stateStart));
+    builder.addData(template.slice(stateEnd));
+  });
 }
 
-export async function buildFinalizeSeedHex(round: RoundState, oracleSeedHex: string): Promise<string> {
-  const ticketRoot = round.ticketRoot ? bytes32FromHex(round.ticketRoot, "ticket root") : hexToBytes(ZERO32_HEX);
-  const oracleSeed = bytes32FromHex(oracleSeedHex, "oracle seed");
-  const seedBytes = new Uint8Array(ticketRoot.length + oracleSeed.length);
-
-  seedBytes.set(ticketRoot, 0);
-  seedBytes.set(oracleSeed, ticketRoot.length);
-
-  const hash = await crypto.subtle.digest("SHA-256", seedBytes);
-  return bytesToHex(new Uint8Array(hash));
+export function buildRaffleRefundBatch8SignatureScript(
+  currentRedeemScript: Uint8Array,
+  ownerPubkeysHex: string[],
+  rangeProofHex: string
+): string {
+  if (ownerPubkeysHex.length !== 8) throw new Error("A batch refund requires exactly 8 ticket owners.");
+  const owners = new Uint8Array(8 * 32);
+  ownerPubkeysHex.forEach((owner, index) => owners.set(bytes32FromHex(owner, `refund owner ${index + 1} public key`), index * 32));
+  const proof = hexToBytes(rangeProofHex);
+  if (proof.length !== 17 * 32) throw new Error("A batch refund range proof must be exactly 544 bytes.");
+  return buildRaffleP2shSignatureScript("refund_batch8", currentRedeemScript, (builder) => {
+    builder.addData(owners);
+    builder.addData(proof);
+  });
 }
 
 export function raffleWinnerIndexFromSeed(seedHex: string, soldTickets: number): number {
@@ -381,11 +376,8 @@ export function raffleWinnerIndexFromSeed(seedHex: string, soldTickets: number):
   }
 
   const seed = bytes32FromHex(seedHex, "random seed");
-  const value =
-    BigInt(seed[0] & 0x7f) |
-    (BigInt(seed[1] & 0x7f) << 7n) |
-    (BigInt(seed[2] & 0x7f) << 14n) |
-    (BigInt(seed[3] & 0x7f) << 21n);
+  let value = 0n;
+  for (let index = 0; index < 7; index += 1) value |= BigInt(seed[index]) << BigInt(index * 8);
 
   return Number(value % BigInt(soldTickets));
 }
@@ -415,7 +407,7 @@ function buildRaffleP2shSignatureScript(
 }
 
 function raffleArtifactForRedeemScript(redeemScript: Uint8Array): RaffleRoundRuntimeArtifact {
-  const candidates = [artifact, legacyV34Artifact, legacyV33Artifact, legacyV32Artifact, legacyV31Artifact, legacyV3BetaArtifact, legacyV2Artifact, legacyV1Artifact];
+  const candidates = [raffleArtifact, refundArtifact];
 
   for (const candidate of candidates) {
     const template = hexToBytes(candidate.script);
@@ -459,18 +451,53 @@ function encodeStateField(field: RuntimeStateField, value: RaffleCovenantStateVa
     return encoded;
   }
 
-  if (field.type === "byte[32]") {
-    if (!(value instanceof Uint8Array) || value.length !== BYTES32_STATE_BYTES) {
-      throw new Error(`State field ${field.name} must be exactly 32 bytes.`);
+  if (field.type.startsWith("byte[")) {
+    const length = fixedByteStateLength(field.type, field.name);
+    if (!(value instanceof Uint8Array) || value.length !== length) {
+      throw new Error(`State field ${field.name} must be exactly ${length} bytes.`);
     }
-
-    const encoded = new Uint8Array(1 + BYTES32_STATE_BYTES);
-    encoded[0] = BYTES32_STATE_BYTES;
-    encoded.set(value, 1);
-    return encoded;
+    return encodeScriptDataPush(value);
   }
 
   throw new Error(`Unsupported covenant state field type ${field.type} for ${field.name}.`);
+}
+
+function raffleArtifactForContractVersion(contractVersion?: string): RaffleRoundRuntimeArtifact {
+  if (contractVersion === RAFFLE_CONTRACT_VERSION) return raffleArtifact;
+  throw new Error(`Unsupported raffle contract version: ${contractVersion || "missing"}.`);
+}
+
+function fixedBytesFromHex(hex: string, length: number, label: string): Uint8Array {
+  const bytes = hexToBytes(hex);
+  if (bytes.length !== length) throw new Error(`${label} must be exactly ${length} bytes.`);
+  return bytes;
+}
+
+function fixedByteStateLength(type: string, fieldName: string): number {
+  const match = /^byte\[(\d+)]$/.exec(type);
+  if (!match) throw new Error(`Unsupported covenant state field type ${type} for ${fieldName}.`);
+  return Number(match[1]);
+}
+
+function encodeScriptDataPush(value: Uint8Array): Uint8Array {
+  let prefix: Uint8Array;
+  if (value.length <= 75) prefix = new Uint8Array([value.length]);
+  else if (value.length <= 0xff) prefix = new Uint8Array([0x4c, value.length]);
+  else if (value.length <= 0xffff) prefix = new Uint8Array([0x4d, value.length & 0xff, value.length >> 8]);
+  else throw new Error(`Covenant state byte array is too large: ${value.length}.`);
+
+  const encoded = new Uint8Array(prefix.length + value.length);
+  encoded.set(prefix, 0);
+  encoded.set(value, prefix.length);
+  return encoded;
+}
+
+function ticketProofFromHex(proofHex: string, label: string): Uint8Array {
+  const proof = hexToBytes(proofHex);
+  if (proof.length !== TICKET_MERKLE_PROOF_BYTES) {
+    throw new Error(`${label} ticket proof must be exactly ${TICKET_MERKLE_PROOF_BYTES} bytes.`);
+  }
+  return proof;
 }
 
 function encodeScriptI64Le(value: bigint, fieldName: string): Uint8Array {

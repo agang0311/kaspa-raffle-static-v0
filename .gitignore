@@ -8,5 +8,8 @@ wallets/
 !.env.example
 *.local
 coverage/
+.tmp/
+.index-data/
+beacon-prover/target/
 *.log
 *.tsbuildinfo

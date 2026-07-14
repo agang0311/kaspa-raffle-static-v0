@@ -1,0 +1,16 @@
+{
+  "name": "kaspa-raffle-indexer",
+  "version": "0.7.0",
+  "description": "Read-only ticket index and Merkle proof service for large Kaspa raffle rounds.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.11.0"
+  },
+  "scripts": {
+    "start": "node raffle-indexer.mjs"
+  },
+  "dependencies": {
+    "@onekeyfe/kaspa-wasm": "1.0.3-alpha.1"
+  }
+}

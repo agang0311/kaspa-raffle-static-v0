@@ -1,112 +1,67 @@
-# Kaspa Raffle Static V0
+# Kaspa Raffle Static
 
-Static raffle dApp for Kaspa Toccata with Mainnet and Testnet 10 profiles.
+单 HTML 的 Kaspa Toccata covenant 抽奖应用。网页直接连接用户配置的 Kaspa wRPC 节点；随机数、开奖条件和派奖金额均由链上 covenant 验证，不依赖 oracle、随机数服务或证明服务器。
 
-The app is designed to run without a project-controlled backend. Users provide a browser-compatible Kaspa wRPC endpoint, connect a supported browser wallet, approve funding transaction signatures in the wallet, and reconstruct raffle state from chain data.
+当前 Mainnet/TN12 共用合约版本：`raffle-v13-chain-pow`。
 
-## Documentation
+旧 metadata 和旧合约不再兼容。
 
-- [中文用户指南](docs/user-guide.zh-CN.md)
-- [中文技术指南](docs/technical-guide.zh-CN.md)
-- [Development verification loop](docs/development-verification-loop.md)
-- [Current project status and backlog](docs/backlog.md)
-- [Original design specification](docs/kaspa_toccata_static_raffle_spec.md) - historical design input; some flows have since been superseded.
+Mainnet Toccata 激活 DAA 为 `474165565`。页面连接节点后会读取实时 virtual DAA，只有达到对应网络的激活点才允许广播 covenant 交易。TN12 已完成四轮真实流程验证；当前合约也已在 Mainnet 连续完成三轮 create、buy、draw/pay，其中一轮覆盖刷新后从历史 load。三轮实际开奖费分别为 `0.040733`、`0.04319`、`0.040733 KAS`。
 
-## Current Status
+## 抽奖机制
 
-The current v0.1.14 implementation includes:
+每次购票都会更新同一个奖池 covenant UTXO 和深度 20 的票据 Merkle 树。售罄后，或达到可配置的超时时间后，任何人都可以直接执行一笔无需钱包签名的 `Draw & Pay`：
 
-- Single-file React + TypeScript SPA build
-- English and Chinese interfaces with a persistent language selector in the top-right corner
-- Focused one-page raffle workspace with technical details collapsed by default
-- Local UI state and metadata helpers
-- Browser-side Kaspa wRPC connection and an extensible wallet adapter registry
-- KasWare-style network menu with independent Mainnet and Testnet 10 node settings
-- KasWare `signPskt` and Kastle `signTx` / `kas:sign_tx` adapters
-- Funding transactions signed by the selected wallet; the page never receives the wallet private key
-- Creator-selected Registry address with explicit marker amount, payment fee, and refund behavior
-- Network-specific default Registry addresses; Mainnet uses `kaspa:qzrhkehvwlzpzh8dv9ecl8eadayyzhrqlkcldzfzu32mrgv2m9npqpc4a6ugh`
-- Browser-side testnet ticket purchase transactions
-- Raffle covenant source draft in Silverscript
-- REST explorer history grouped by raffle round
-- Shareable round links for participant entry
-- Development verification gates for buyer flow and covenant payout readiness
-- Original product spec in [`docs/kaspa_toccata_static_raffle_spec.md`](docs/kaspa_toccata_static_raffle_spec.md)
-- Development backlog in [`docs/backlog.md`](docs/backlog.md)
+```text
+boundary_daa = sold_out ? current_covenant_utxo_daa + 30 : refund_after_daa + 30
+random_block = selected chain 中首个 daa_score >= boundary_daa 的区块
+seed = SHA256(ticket_root || random_block_hash || chain_seqcommit)
+winner = uint56_le(seed[0..7]) % sold_tickets
+```
 
-The current flow builds browser-side Toccata covenant transactions for round creation, batched ticket buys, direct finalize, and timeout refunds. One purchase can cover many sequential ticket numbers, allowing up to 1,000,000 tickets while keeping at most 20 on-chain purchase batches. New testnet rounds use a round-specific open development oracle key that any browser can reconstruct after loading history, so the creator does not need to return for finalization. This convenience mode is not a production randomness oracle; legacy rounds created with random creator-only oracle keys still require the original browser, an external attestation, or timeout refund. Historical ticket and payout lookup currently uses `https://api-tn10.kaspa.org` full-transaction indexing because the node RPC is UTXO-focused.
+Covenant 在交易中重新计算目标区块及其选中父区块的 keyed BLAKE2b 哈希，验证 DAA 跨越关系，并通过 `OpChainblockSeqCommit` 确认目标区块属于当前选中链。售罄轮在最后一张票确认后才取未来区块；未售罄轮固定取销售截止后的未来区块，因此参与者无法在看到随机区块后追加购票重抽。
 
-## Covenant Direction
+超时后购票入口会拒绝继续延长票链。触发者只提交链上区块 witness 和中奖票 Merkle proof；合约自行重算并强制唯一的中奖地址与金额。
 
-The covenant keeps the pot in a `RaffleRound` covenant UTXO. Ticket purchases spend the current round state into the next state. Each purchase stores its ending ticket number and owner public key, so finalize can prove that the payout address owns the winning ticket without storing one owner per ticket. The oracle public key and ticket root remain native `byte[32]` state fields. Finalization is valid only when all tickets have sold or the configured DAA deadline has arrived. It computes the winner, verifies the owner, pays the prize, and refunds the carrier to the creator in the same transaction.
+### 安全边界
 
-## Network Setup
+目标区块由售罄交易的 covenant UTXO DAA，或预先写入合约的销售截止 DAA 唯一确定。执行 `Draw & Pay` 不需要连接钱包，触发者只能广播公开 witness；合约会重新计算区块哈希、验证选中父区块和 DAA 跨越、读取链上 sequencing commitment、重算中奖票，并强制奖池输出地址和金额。因此创建者、买家、indexer、RPC 节点和开奖触发者都不能选择随机种子、替换中奖票或重抽；恶意服务最多拒绝提供数据，任何人都可以换节点或 indexer 后继续。
 
-Use the network menu at the left of the connection bar. Switching networks disconnects the current node and wallet and clears the local round view so transactions cannot cross networks.
+与所有仅使用 PoW 区块哈希的随机方案一样，拥有目标区块出块权的矿工理论上可以放弃发布自己挖到的区块，并承担丢失区块奖励和重新挖矿的成本。没有独立随机源、可信硬件或多方提交揭示时，无法从确定性区块链中数学消除这种 withholding 能力。当前模式选择“不增加服务器”，安全性因此建立在 Kaspa PoW 共识和目标区块不被单一攻击者经济性控制的假设上。
 
-- Mainnet default wRPC: `ws://127.0.0.1:18110`
-- Mainnet history REST API: `https://api.kaspa.org`
-- Testnet 10 default wRPC: `ws://tn12-node.kaspa.com:18210`
-- Testnet 10 history REST API: `https://api-tn10.kaspa.org`
+## 数据模式
 
-The local Mainnet endpoint assumes `kaspad` was started with JSON wRPC on port `18110` and UTXO indexing enabled. `127.0.0.1` works when the page and node run on the same computer. Use the gear button beside a network to change its wRPC endpoint; each endpoint is stored separately in the browser.
+- 最多 1000 张票：浏览器从 Registry 和 covenant 地址读取交易并在本地重建票据树，不需要 indexer。
+- 超过 1000 张票：配置独立 `indexer/raffle-indexer.mjs`，由它保存票据树并返回中奖票 proof。
+- 浏览器会在本地缓存参与过的轮次，刷新后可以从“加载历史”恢复。
 
-## Testnet Notes
+Indexer 只索引公开交易和生成 Merkle proof，不参与随机数选择。
 
-Default local testing targets the public Toccata testnet endpoint:
+## 费用
 
-- wRPC: `ws://tn12-node.kaspa.com:18210`
-- network id: use the network reported after connecting; as of 2026-07-09 this endpoint reports `testnet-10`
-- initial ticket price: `30000000` sompi, or `0.3 KAS`
-- default round size: 10 tickets
-- contract limit: 1,000,000 tickets across at most 20 purchase batches
-- round carrier reserve: `0.2 KAS` by default with a `0.1 KAS` storage-safe minimum. New v3.5 rounds deduct `0.02 KAS` at finalize and return the remainder to the creator.
-- registry marker: `0.05 KAS` is sent through a storage-safe staging transaction. The Testnet default registry returns `0.049 KAS` after a `0.001 KAS` refund fee. The Mainnet default and custom registries retain the marker under the destination address owner's control.
-- temporary covenant funding is sized from the payment plus the action fee, with a `0.2 KAS` minimum for small payments; eligible change is returned in the same covenant transaction.
+- 创建 covenant：`0.003 KAS`
+- 买票 covenant：`0.0175 KAS`
+- 开奖并派奖 covenant：按完整链上区块头见证的实际 mass 计算（通常约 `0.05-0.06 KAS`，合约上限 `0.2 KAS`）
+- Registry marker：默认 `0.05 KAS`，公开 Registry 会扣除 `0.001 KAS` 后自动退回
+- Carrier 是可退还预留，不是手续费；派奖或完整退款时返还剩余部分
 
-Install KasWare or Kastle, select a Kaspa testnet account, then choose the detected provider from **Connect wallet**. Wallet connection is requested only after a wallet is selected.
+## 开发
 
-As of the manual check on 2026-07-08, `https://faucet-tn12.kaspanet.io/` returned HTTP 403, `https://faucet-tn11.kaspanet.io/` reported maintenance, and the generic faucet redirected to TN10 with 0 TKAS available for the current IP. TN12 funds may need to come from mining or the Kaspa Discord `#testnet` channel until a faucet is available again.
-
-Manual transaction testing on 2026-07-12 confirmed the v3.4 low-fee create, marker, buy, finalize, History-load, and timeout-refund paths. The v3.5 build additionally runs `npm run verify:fees:1m`, which constructs 1,000,000-ticket Toccata v1 fixtures for create, one-batch buy, the twentieth buy, finalize, and timeout refund. The fixed fees remain `0.002`, `0.02`, `0.02`, and `0.03 KAS`; v3.4 and v3.3 artifacts remain available for historical rounds. A maximally skewed 20-batch refund is also tested and correctly reported as non-standard because its small outputs exceed storage mass; increasing its fee would not fix that transaction shape.
-
-## Development
-
-```bash
+```powershell
 npm install
+npm run compile:contract
+npm run verify
 npm run dev
 ```
 
-Build static assets:
+`npm run build` 生成可直接发布的单文件 `dist/index.html`。Kaspa WASM 会以 gzip 形式内嵌并由现代浏览器原生解压，发布文件约 6.5 MB。
 
-```bash
-npm run build
+启动大规模轮次 indexer：
+
+```powershell
+$env:KASPA_RPC_URL="ws://127.0.0.1:18110"
+$env:KASPA_NETWORK="mainnet"
+npm run start:indexer
 ```
 
-The build output is a self-contained `dist/index.html` with JavaScript, CSS, and Kaspa WASM embedded. It can be deployed as one file to GitHub Pages, IPFS, Arweave, Nginx, or any static file host.
-
-Run the current development gate:
-
-```bash
-npm run verify
-```
-
-Run the covenant release gate:
-
-```bash
-npm run verify:covenant
-```
-
-The covenant release gate requires the compiled Silverscript artifact and wired browser-side covenant transaction builders. See [`docs/development-verification-loop.md`](docs/development-verification-loop.md).
-
-Compile the covenant source with the local Silverscript checkout:
-
-```bash
-npm run compile:contract
-```
-
-The compiler toolchain runs locally now. The raffle source stores oracle public key and ticket root as fixed `byte[32]` covenant state fields and the browser encoder writes the same state layout produced by the compiler.
-
-## Safety
-
-This app is experimental. Mainnet transactions use real KAS; review the selected network, node, wallet, and every signature request before approving it. A static page can still be modified by whoever serves it.
+`indexer/` 也是一个可独立安装和容器部署的应用，详见 [`indexer/README.md`](indexer/README.md)。网页和 indexer 的节点、Registry、历史 API 及 indexer 地址均可独立配置。

@@ -1,9 +1,16 @@
 import type { RaffleMetadata } from "./types";
 
+export const RAFFLE_CONTRACT_VERSION = "raffle-v13-chain-pow";
+
+export function raffleContractVersionForNetwork(network: string): string {
+  void network;
+  return RAFFLE_CONTRACT_VERSION;
+}
+
 export function createEmptyMetadata(network = "testnet-10"): RaffleMetadata {
   return {
     app: "kaspa-raffle-static",
-    version: "0.1.14",
+    version: "0.7.0",
     network,
     roundId: "",
     createTxId: "",
@@ -12,14 +19,12 @@ export function createEmptyMetadata(network = "testnet-10"): RaffleMetadata {
     minTickets: 1,
     creatorAddress: "",
     creatorPubkey: "",
-    creatorCommitment: "",
-    oraclePublicKey: "",
     refundTimeoutSeconds: "600",
     refundTimeoutDaa: "6000",
     refundAfterDaaScore: "",
     treasuryAddress: "",
     registryAddress: "",
-    contractVersion: "raffle-v3.5-million-ticket"
+    contractVersion: raffleContractVersionForNetwork(network)
   };
 }
 
@@ -37,7 +42,6 @@ export function parseMetadata(raw: string): RaffleMetadata {
     "ticketPrice",
     "maxTickets",
     "minTickets",
-    "oraclePublicKey",
     "contractVersion"
   ];
 
@@ -45,6 +49,11 @@ export function parseMetadata(raw: string): RaffleMetadata {
     if (parsed[field] === undefined || parsed[field] === "") {
       throw new Error(`Metadata is missing ${field}.`);
     }
+  }
+
+  const expectedContractVersion = raffleContractVersionForNetwork(String(parsed.network));
+  if (parsed.contractVersion !== expectedContractVersion) {
+    throw new Error(`Unsupported raffle contract version. This page only accepts ${expectedContractVersion} on ${parsed.network}.`);
   }
 
   if (Number(parsed.ticketPrice) <= 0) {
